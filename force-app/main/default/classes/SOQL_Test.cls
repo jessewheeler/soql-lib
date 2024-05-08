@@ -856,6 +856,49 @@ private class SOQL_Test {
     }
 
     @IsTest
+    static void multipleSubQueriesWithConditions() {
+        // Setup
+        String leadSource = 'Web';
+        Date fromDate = Date.newInstance(2024, 1, 1);
+        Date toDate = Date.newInstance(2024, 1, 30);
+
+        // Test
+        SOQL builder = SOQL.of(Account.SObjectType)
+            .with(
+                SOQL.SubQuery.of('Contacts')
+                    .with(Contact.Id)
+                    .whereAre(SOQL.FilterGroup
+                        .add(SOQL.Filter.with(Contact.CreatedDate).lessOrEqual(fromDate))
+                        .add(SOQL.Filter.with(Contact.CreatedDate).isNull())
+                        .add(SOQL.Filter.with(Contact.CreatedDate).greaterOrEqual(toDate))
+                        .conditionLogic('1 AND (2 OR 3)')
+                    )
+            )
+            .with(
+                SOQL.SubQuery.of('Opportunities')
+                    .with(Opportunity.Id)
+                    .whereAre(SOQL.FilterGroup
+                        .add(SOQL.Filter.with(Opportunity.LeadSource).equal(leadSource))
+                        .add(SOQL.Filter.with(Contact.CreatedDate).equal(fromDate))
+                    )
+            )
+            .setLimit(1);
+
+        // Verify
+        Assert.areEqual(
+            'SELECT Id , (SELECT Id FROM Contacts WHERE (CreatedDate <= :v1 AND (CreatedDate = :v2 OR CreatedDate >= :v3))), (SELECT Id FROM Opportunities WHERE (LeadSource = :v4 AND CreatedDate = :v5)) FROM Account LIMIT 1',
+            builder.toString()
+        );
+
+        Map<String, Object> binding = builder.binding();
+        Assert.areEqual(fromDate, binding.get('v1'));
+        Assert.areEqual(null, binding.get('v2'));
+        Assert.areEqual(toDate, binding.get('v3'));
+        Assert.areEqual(leadSource, binding.get('v4'));
+        Assert.areEqual(fromDate, binding.get('v5'));
+    }
+
+    @IsTest
     static void delegatedScope() {
         // Test
         String soql = SOQL.of(Task.SObjectType)
@@ -1073,6 +1116,20 @@ private class SOQL_Test {
 
         Map<String, Object> binding = builder.binding();
         Assert.areEqual('%Test%', binding.get('v1'));
+    }
+
+    @IsTest
+    static void containsNull() {
+        // Test
+        SOQL builder = SOQL.of(Account.SObjectType)
+            .whereAre(SOQL.Filter.with(Account.Name).contains(null));
+
+        // Verify
+        String soql = builder.toString();
+        Assert.areEqual('SELECT Id FROM Account WHERE Name LIKE :v1', soql);
+
+        Map<String, Object> binding = builder.binding();
+        Assert.areEqual('%null%', binding.get('v1'));
     }
 
     @IsTest
@@ -1703,6 +1760,33 @@ private class SOQL_Test {
     }
 
     @IsTest
+    static void groupByRelated() {
+        // Test
+        String soql = SOQL.of(OpportunityLineItem.SObjectType)
+            .count(OpportunityLineItem.Name, 'count')
+            .groupBy('OpportunityLineItem.Opportunity.Account', Account.Id)
+            .toString();
+
+        // Verify
+        Assert.areEqual('SELECT COUNT(Name) count FROM OpportunityLineItem GROUP BY OpportunityLineItem.Opportunity.Account.Id', soql);
+    }
+
+    @IsTest
+    static void groupByRelatedToAggregated() {
+        // Setup
+        insertAccounts();
+
+        // Test
+        List<AggregateResult> results = SOQL.of(Account.SObjectType)
+            .count(Account.Name, 'names')
+            .groupBy('Account.CreatedBy', User.Id)
+            .toAggregated();
+
+        // Verify
+        Assert.areEqual(1, results.size());
+    }
+
+    @IsTest
     static void groupByRollup() {
         // Test
         String soql = SOQL.of(Lead.SObjectType)
@@ -1716,6 +1800,32 @@ private class SOQL_Test {
     }
 
     @IsTest
+    static void groupByRollupManyFields() {
+        // Test
+        String soql = SOQL.of(Lead.SObjectType)
+            .count(Lead.Name, 'cnt')
+            .with(Lead.Status, Lead.LeadSource)
+            .groupByRollup(Lead.Status)
+            .groupByRollup(Lead.LeadSource)
+            .toString();
+
+        // Verify
+        Assert.areEqual('SELECT Status, LeadSource, COUNT(Name) cnt FROM Lead GROUP BY ROLLUP(Status, LeadSource)', soql);
+    }
+
+    @IsTest
+    static void groupByRollupRelated() {
+        // Test
+        String soql = SOQL.of(Lead.SObjectType)
+            .count(Lead.Name, 'cnt')
+            .groupByRollup('ConvertedOpportunity', Opportunity.StageName)
+            .toString();
+
+        // Verify
+        Assert.areEqual('SELECT COUNT(Name) cnt FROM Lead GROUP BY ROLLUP(ConvertedOpportunity.StageName)', soql);
+    }
+
+    @IsTest
     static void groupByCube() {
         // Test
         String soql = SOQL.of(Account.SObjectType)
@@ -1725,6 +1835,31 @@ private class SOQL_Test {
 
         // Verify
         Assert.areEqual('SELECT Type FROM Account GROUP BY CUBE(Type)', soql);
+    }
+
+    @IsTest
+    static void groupByCubeManyFields() {
+        // Test
+        String soql = SOQL.of(Account.SObjectType)
+            .with(Account.Type, Account.BillingCountry)
+            .groupByCube(Account.Type)
+            .groupByCube(Account.BillingCountry)
+            .toString();
+
+        // Verify
+        Assert.areEqual('SELECT Type, BillingCountry FROM Account GROUP BY CUBE(Type, BillingCountry)', soql);
+    }
+
+    @IsTest
+    static void groupByCubeRelated() {
+        // Test
+        String soql = SOQL.of(Lead.SObjectType)
+            .count(Lead.Name, 'cnt')
+            .groupByCube('ConvertedOpportunity', Opportunity.StageName)
+            .toString();
+
+        // Verify
+        Assert.areEqual('SELECT COUNT(Name) cnt FROM Lead GROUP BY CUBE(ConvertedOpportunity.StageName)', soql);
     }
 
     @IsTest
